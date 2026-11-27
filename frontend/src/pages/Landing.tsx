@@ -14,7 +14,8 @@ import {
   IconUsers,
 } from "../components/bk/Icons";
 import { API_URL } from "@/lib/bkAuth";
-import type { BeritaItem } from "@/lib/api";
+import DOMPurify from "dompurify";
+import { daftarBeritaTayang, gambarBerita, type Berita } from "@/lib/beritaApi";
 import { GURU_BK_SEKOLAH, MISI_BK, VISI_BK } from "@/data/profilBk";
 import { inisial } from "@/data/guruContoh";
 
@@ -90,20 +91,25 @@ export default function Landing() {
         if (!res.ok) throw new Error("Gagal mengambil data berita");
         return res.json();
       })
-      .then((data: BeritaItem[]) => {
-        if (Array.isArray(data) && data.length > 0) {
-          const list: BeritaCard[] = data.map((b) => ({
-            id: b.id,
-            judul: b.judul,
-            kategori: b.kategori,
-            tanggal: formatTgl(b.tanggal),
-            ringkasan: b.ringkasan,
-            isi: b.isi,
-            gambar: b.gambar || "",
-            warna: (b.kategori === "PIK-R"
-              ? ["#fef3c7", "#fcd34d"]
-              : ["#dbeafe", "#93c5fd"]) as [string, string],
-          }));
+      .then((data: Berita[]) => {
+        const tayang = daftarBeritaTayang(data);
+        if (tayang.length > 0) {
+          const list: BeritaCard[] = tayang.map((b) => {
+            const kategori: "BK" | "PIK-R" = b.kategori === "PIK-R" ? "PIK-R" : "BK";
+            return {
+              id: b.id,
+              judul: b.judul,
+              kategori,
+              tanggal: formatTgl(b.tanggal ?? undefined),
+              ringkasan: b.ringkasan,
+              isi: b.isi,
+              gambar: gambarBerita(b, ""),
+              warna:
+                kategori === "PIK-R"
+                  ? ["#fef3c7", "#fcd34d"]
+                  : ["#dbeafe", "#93c5fd"],
+            };
+          });
           setBeritaList(list);
         }
       })
@@ -390,7 +396,7 @@ export default function Landing() {
                   lineHeight: "1.7",
                   color: "#374151",
                 }}
-                dangerouslySetInnerHTML={{ __html: selectedBerita.isi }}
+                dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(selectedBerita.isi) }}
               />
 
               <div style={{ marginTop: "24px", textAlign: "right" }}>

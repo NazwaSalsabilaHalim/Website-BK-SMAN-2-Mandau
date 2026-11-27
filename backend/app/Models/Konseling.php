@@ -19,13 +19,17 @@ class Konseling extends Model
         'waktu',
         'status',
         'alasan_penolakan',
+        'deskripsi_kegiatan',
         'hasil_konseling',
+        'evaluasi',
+        'rencana_tindak_lanjut',
     ];
 
     protected function casts(): array
     {
         return [
             'tanggal' => 'date',
+            'rencana_tindak_lanjut' => 'array',
         ];
     }
 

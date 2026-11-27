@@ -12,18 +12,18 @@ import {
 } from "lucide-react";
 import type { ReactNode } from "react";
 import { Link, useParams } from "react-router";
-import Breadcrumb from "../../components/bk/Breadcrumb";
-import SafeImage from "../../components/bk/SafeImage";
+import Breadcrumb from "@/components/bk/Breadcrumb";
+import SafeImage from "@/components/bk/SafeImage";
+import { SESI_CONTOH, formatTanggalPanjang } from "@/data/riwayatContoh";
 import {
-  ALASAN_TOLAK_CONTOH,
-  HASIL_CONTOH,
-  RIWAYAT,
-  SESI_CONTOH,
-  STATUS_STYLE,
-  formatTanggalPanjang,
+  gayaStatus,
   idDokumen,
   nomorPertemuan,
-} from "../../data/riwayatContoh";
+  pecahBaris,
+  punyaHasil,
+  useApi,
+  type Konseling,
+} from "@/lib/konselingApi";
 
 function Info2({
   ikon,
@@ -56,13 +56,26 @@ function JudulKartu({ ikon, teks }: { ikon: ReactNode; teks: string }) {
 
 export default function SiswaDetail() {
   const { id } = useParams();
-  const item = RIWAYAT.find((r) => String(r.id) === id);
+  const { data, error, loading } = useApi<Konseling[]>("/konseling");
+
+  if (loading) {
+    return (
+      <div className="soon-box">
+        <h1 className="soon-title">Memuat detail...</h1>
+      </div>
+    );
+  }
+
+  const daftar = data ?? [];
+  const item = daftar.find((r) => String(r.id) === id);
 
   if (!item) {
     return (
       <div className="soon-box">
         <h1 className="soon-title">Riwayat tidak ditemukan</h1>
-        <p className="soon-text">Data konseling yang kamu cari tidak ada.</p>
+        <p className="soon-text">
+          {error || "Data konseling yang kamu cari tidak ada."}
+        </p>
         <Link to="/siswa/riwayat" className="soon-link">
           Kembali ke Riwayat
         </Link>
@@ -70,8 +83,11 @@ export default function SiswaDetail() {
     );
   }
 
-  const st = STATUS_STYLE[item.status];
-  const selesai = item.status === "selesai";
+  const st = gayaStatus(item.status);
+  const adaHasil = punyaHasil(item.status);
+
+  const deskripsi = pecahBaris(item.deskripsi_kegiatan);
+  const hasil = pecahBaris(item.hasil_konseling);
 
   return (
     <div className="sdt-page">
@@ -89,7 +105,7 @@ export default function SiswaDetail() {
           <div className="sdt-head-main">
             <div className="sdt-meta">
               <span className={"badge-sq-tight " + st.badge}>{st.label}</span>
-              {selesai && <span>• PERTEMUAN KE-{nomorPertemuan(item)}</span>}
+              {adaHasil && <span>• PERTEMUAN KE-{nomorPertemuan(item, daftar)}</span>}
             </div>
             <h1 className="sdt-topic">{item.topik}</h1>
 
@@ -107,7 +123,7 @@ export default function SiswaDetail() {
               <Info2
                 ikon={<Clock className="sdt-icon" />}
                 label="Waktu Sesi"
-                nilai={SESI_CONTOH.waktu}
+                nilai={`${item.waktu} WIB`}
               />
               <Info2
                 ikon={<MapPin className="sdt-icon" />}
@@ -128,7 +144,7 @@ export default function SiswaDetail() {
       </section>
 
       {/* Isi sesuai status */}
-      {selesai ? (
+      {adaHasil ? (
         <>
           <div className="sdt-pair">
             <section className="sdt-card">
@@ -137,9 +153,11 @@ export default function SiswaDetail() {
                 teks="Deskripsi Kegiatan"
               />
               <div className="sdt-text">
-                {HASIL_CONTOH.deskripsi.map((p) => (
-                  <p key={p}>{p}</p>
-                ))}
+                {deskripsi.length === 0 ? (
+                  <p>Deskripsi kegiatan belum diisi.</p>
+                ) : (
+                  deskripsi.map((p) => <p key={p}>{p}</p>)
+                )}
               </div>
             </section>
 
@@ -148,14 +166,20 @@ export default function SiswaDetail() {
                 ikon={<SquareCheckBig className="sdt-icon-md" />}
                 teks="Hasil Kegiatan"
               />
-              <ol className="sdt-steps">
-                {HASIL_CONTOH.hasil.map((h, i) => (
-                  <li key={h} className="sdt-step">
-                    <span className="sdt-step-num">{i + 1}</span>
-                    {h}
-                  </li>
-                ))}
-              </ol>
+              {hasil.length === 0 ? (
+                <div className="sdt-text">
+                  <p>Hasil kegiatan belum diisi.</p>
+                </div>
+              ) : (
+                <ol className="sdt-steps">
+                  {hasil.map((h, i) => (
+                    <li key={h} className="sdt-step">
+                      <span className="sdt-step-num">{i + 1}</span>
+                      {h}
+                    </li>
+                  ))}
+                </ol>
+              )}
             </section>
           </div>
 
@@ -168,12 +192,16 @@ export default function SiswaDetail() {
               <div>
                 <p className="sdt-eval-label">RENCANA TINDAKAN</p>
                 <div className="sdt-plan-list">
-                  {HASIL_CONTOH.rencana.map((r) => (
-                    <div key={r.judul} className="sdt-plan">
-                      <p className="sdt-plan-title">{r.judul}</p>
-                      <p className="sdt-plan-text">{r.isi}</p>
-                    </div>
-                  ))}
+                  {item.rencana_tindak_lanjut.length === 0 ? (
+                    <p className="sdt-plan-text">Tidak ada rencana tindak lanjut.</p>
+                  ) : (
+                    item.rencana_tindak_lanjut.map((r) => (
+                      <div key={r.judul} className="sdt-plan">
+                        <p className="sdt-plan-title">{r.judul}</p>
+                        <p className="sdt-plan-text">{r.isi}</p>
+                      </div>
+                    ))
+                  )}
                 </div>
               </div>
 
@@ -181,7 +209,7 @@ export default function SiswaDetail() {
                 <p className="sdt-eval-label">KESIMPULAN COUNSELOR</p>
                 <div className="sdt-conclusion">
                   <p className="sdt-conclusion-text">
-                    “{HASIL_CONTOH.kesimpulan}”
+                    “{item.evaluasi || "Evaluasi belum diisi."}”
                   </p>
                   <div className="sdt-sign">
                     <span>Tanda Tangan Digital Tersimpan</span>
@@ -221,7 +249,7 @@ export default function SiswaDetail() {
                 <>
                   <h2 className="sdt-status-title">Pengajuan ditolak</h2>
                   <p className="sdt-status-text">
-                    Alasan Guru BK: {ALASAN_TOLAK_CONTOH}
+                    Alasan Guru BK: {item.alasan_penolakan || "-"}
                   </p>
                   <Link to="/siswa/ajukan" className="sdt-status-cta">
                     Ajukan Ulang

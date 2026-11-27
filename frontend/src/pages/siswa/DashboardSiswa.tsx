@@ -1,5 +1,7 @@
+import { CircleX } from "lucide-react";
+import { useState, type ComponentType } from "react";
 import { Link } from "react-router";
-import SafeImage from "../../components/bk/SafeImage";
+import SafeImage from "@/components/bk/SafeImage";
 import {
   IconCalendar,
   IconCheckCircle,
@@ -10,65 +12,23 @@ import {
   IconRoom,
   IconSend,
   IconUser,
-} from "../../components/bk/Icons";
+} from "@/components/bk/Icons";
+import { Card, CardHeader, StatCard } from "@/components/bk/ui";
 import {
-  Card,
-  CardHeader,
-  StatCard,
-  Badge,
-} from "../../components/bk/ui";
+  SESI_CONTOH,
+  formatTanggal,
+  formatTanggalPanjang,
+} from "@/data/riwayatContoh";
+import {
+  gayaStatus,
+  hitungRingkasan,
+  useApi,
+  type Konseling,
+} from "@/lib/konselingApi";
 
 /* -----------------------------------------------------------
-   DATA CONTOH. Nanti diganti data dari API (tabel konseling).
+   Berita: MASIH DATA CONTOH. Nanti dari GET /api/berita.
    ----------------------------------------------------------- */
-type Status = "menunggu" | "disetujui" | "ditolak" | "selesai";
-
-const RINGKASAN = {
-  totalPengajuan: 12,
-  konselingSelesai: 8,
-  statusTerbaru: { status: "disetujui" as Status, diperbarui: "2 jam lalu" },
-};
-
-const JADWAL: {
-  tanggal: string;
-  waktu: string;
-  ruang: string;
-  guru: string;
-} | null = {
-  tanggal: "Senin, 24 Oktober 2023",
-  waktu: "10:00 - 11:30 WIB",
-  ruang: "Ruang Konseling Utama",
-  guru: "Ibu Ratna Sari, S.Pd.",
-};
-
-type Aktivitas = {
-  tipe: "selesai" | "diterima" | "dikirim";
-  judul: string;
-  waktu: string;
-  isi: string;
-};
-
-const AKTIVITAS: Aktivitas[] = [
-  {
-    tipe: "selesai",
-    judul: "Sesi Selesai",
-    waktu: "Kemarin, 14:20",
-    isi: 'Sesi konseling mengenai "Manajemen Stress" telah selesai dilaksanakan.',
-  },
-  {
-    tipe: "diterima",
-    judul: "Pengajuan Diterima",
-    waktu: "20 Okt, 09:15",
-    isi: "Pengajuan jadwal konseling untuk tanggal 24 Oktober telah disetujui oleh Ibu Ratna.",
-  },
-  {
-    tipe: "dikirim",
-    judul: "Pengajuan Dikirim",
-    waktu: "19 Okt, 16:45",
-    isi: "Anda mengirimkan permohonan konseling baru perihal rencana karir.",
-  },
-];
-
 const BERITA_UTAMA = {
   judul: "Tips Manajemen Waktu Untuk Siswa SMAN 2 Mandau",
   meta: "22 Okt 2023 • PIK-R Mandau",
@@ -96,29 +56,148 @@ const BERITA_LAIN = [
   },
 ];
 
+/* -----------------------------------------------------------
+   Aktivitas diturunkan dari data konseling
+   ----------------------------------------------------------- */
+type Aktivitas = {
+  key: string;
+  tipe: "selesai" | "diterima" | "dikirim" | "ditolak";
+  judul: string;
+  waktu: string;
+  isi: string;
+  t: number;
+};
+
+type IkonProps = ComponentType<{ width?: number; height?: number }>;
+
 /* Nama class saja; isi gayanya ada di index.css */
-const AKTIVITAS_STYLE = {
+const AKTIVITAS_STYLE: Record<Aktivitas["tipe"], { icon: IkonProps; cls: string }> = {
   selesai: { icon: IconChecks, cls: "tint-green-600" },
   diterima: { icon: IconCheckCircle, cls: "tint-indigo-700" },
   dikirim: { icon: IconSend, cls: "tint-blue-700" },
+  ditolak: { icon: CircleX, cls: "tint-amber-700" },
 };
 
+const waktuMs = (iso: string) => {
+  const t = Date.parse(iso);
+  return Number.isNaN(t) ? 0 : t;
+};
+
+/** "Hari ini, 14:20" / "Kemarin, 14:20" / "20 Nov, 09:15" */
+function labelWaktu(iso: string, sekarang: number) {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  const jam = d
+    .toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit", hour12: false })
+    .replace(".", ":");
+  const hari = (x: Date) => x.toLocaleDateString("en-CA");
+  const kemarin = new Date(sekarang);
+  kemarin.setDate(kemarin.getDate() - 1);
+
+  if (hari(d) === hari(new Date(sekarang))) return `Hari ini, ${jam}`;
+  if (hari(d) === hari(kemarin)) return `Kemarin, ${jam}`;
+  return `${d.toLocaleDateString("id-ID", { day: "numeric", month: "short" })}, ${jam}`;
+}
+
+/** "2 jam lalu" */
+function waktuRelatif(iso: string, sekarang: number) {
+  const t = waktuMs(iso);
+  if (!t) return "";
+  const menit = Math.floor((sekarang - t) / 60000);
+  if (menit < 1) return "Baru saja";
+  if (menit < 60) return `${menit} menit lalu`;
+  const jam = Math.floor(menit / 60);
+  if (jam < 24) return `${jam} jam lalu`;
+  return `${Math.floor(jam / 24)} hari lalu`;
+}
+
+function buatAktivitas(daftar: Konseling[], sekarang: number): Aktivitas[] {
+  const hasil: Aktivitas[] = [];
+
+  for (const k of daftar) {
+    hasil.push({
+      key: `${k.id}-dikirim`,
+      tipe: "dikirim",
+      judul: "Pengajuan Dikirim",
+      waktu: labelWaktu(k.dibuat, sekarang),
+      isi: `Kamu mengirim permohonan konseling "${k.topik}".`,
+      t: waktuMs(k.dibuat),
+    });
+
+    const t = waktuMs(k.diperbarui);
+    const waktu = labelWaktu(k.diperbarui, sekarang);
+
+    if (k.status === "disetujui") {
+      hasil.push({
+        key: `${k.id}-status`,
+        tipe: "diterima",
+        judul: "Pengajuan Diterima",
+        waktu,
+        isi: `Pengajuan "${k.topik}" untuk tanggal ${formatTanggal(k.tanggal)} disetujui oleh ${k.guru}.`,
+        t,
+      });
+    } else if (k.status === "ditolak") {
+      hasil.push({
+        key: `${k.id}-status`,
+        tipe: "ditolak",
+        judul: "Pengajuan Ditolak",
+        waktu,
+        isi: `Pengajuan "${k.topik}" ditolak oleh ${k.guru}.`,
+        t,
+      });
+    } else if (k.status === "selesai" || k.status === "perlu_pertemuan_lanjutan") {
+      hasil.push({
+        key: `${k.id}-status`,
+        tipe: "selesai",
+        judul: k.status === "selesai" ? "Sesi Selesai" : "Perlu Pertemuan Lanjutan",
+        waktu,
+        isi: `Sesi konseling "${k.topik}" bersama ${k.guru} sudah dilaksanakan.`,
+        t,
+      });
+    }
+  }
+
+  return hasil.sort((a, b) => b.t - a.t).slice(0, 3);
+}
+
 export default function DashboardSiswa() {
+  const { data, error } = useApi<Konseling[]>("/konseling");
+  const daftar = data ?? [];
+
+  // Waktu "sekarang" diambil sekali saat halaman dibuka
+  const [sekarang] = useState(() => Date.now());
+  const hariIni = new Date(sekarang).toLocaleDateString("en-CA");
+
+  const ringkasan = hitungRingkasan(daftar);
+
+  const terbaru =
+    [...daftar].sort((a, b) => waktuMs(b.diperbarui) - waktuMs(a.diperbarui))[0] ?? null;
+
+  const jadwal =
+    daftar
+      .filter((k) => k.status === "disetujui" && k.tanggal >= hariIni)
+      .sort((a, b) => `${a.tanggal} ${a.waktu}`.localeCompare(`${b.tanggal} ${b.waktu}`))[0] ??
+    null;
+
+  const aktivitas = buatAktivitas(daftar, sekarang);
+
   return (
     <div className="dash-page">
+      {error && <p className="sd-empty">{error}</p>}
+
       {/* Baris ringkasan */}
       <div className="sd-stats">
         <StatCard
           label="Total Pengajuan"
-          value={RINGKASAN.totalPengajuan}
+          value={ringkasan.total}
           icon={<IconDoc width={22} height={22} />}
           iconCls="tint-blue-800"
-          footer={<p className="note">Sejak awal semester</p>}
+          footer={<p className="note">Seluruh pengajuan</p>}
         />
 
         <StatCard
           label="Konseling Selesai"
-          value={String(RINGKASAN.konselingSelesai).padStart(2, "0")}
+          value={String(ringkasan.selesai).padStart(2, "0")}
           icon={<IconCheckCircle width={22} height={22} />}
           iconCls="tint-green-600"
           footer={<p className="note">Telah ditangani</p>}
@@ -130,12 +209,18 @@ export default function DashboardSiswa() {
           icon={<IconHistory width={22} height={22} />}
           iconCls="tint-amber-700"
           footer={
-            <div className="sd-stat-stack">
-              <Badge status={RINGKASAN.statusTerbaru.status} />
-              <p className="note">
-                Diperbarui: {RINGKASAN.statusTerbaru.diperbarui}
-              </p>
-            </div>
+            terbaru ? (
+              <div className="sd-stat-stack">
+                <span className={"badge-sq-tight " + gayaStatus(terbaru.status).badge}>
+                  {gayaStatus(terbaru.status).label}
+                </span>
+                <p className="note">
+                  Diperbarui: {waktuRelatif(terbaru.diperbarui, sekarang)}
+                </p>
+              </div>
+            ) : (
+              <p className="note">Belum ada pengajuan</p>
+            )
           }
         />
       </div>
@@ -151,27 +236,27 @@ export default function DashboardSiswa() {
               right={<IconCalendar width={18} height={18} className="sd-icon-accent" />}
             />
             <div className="sd-pad">
-              {JADWAL ? (
+              {jadwal ? (
                 <div className="sd-sched">
                   <ul className="sd-sched-list">
                     <li className="sd-sched-item">
                       <IconCalendar width={16} height={16} className="sd-sched-icon" />
-                      {JADWAL.tanggal}
+                      {formatTanggalPanjang(jadwal.tanggal)}
                     </li>
                     <li className="sd-sched-item">
                       <IconClock width={16} height={16} className="sd-sched-icon" />
-                      {JADWAL.waktu}
+                      {jadwal.waktu} WIB
                     </li>
                     <li className="sd-sched-item">
                       <IconRoom width={16} height={16} className="sd-sched-icon" />
-                      {JADWAL.ruang}
+                      {SESI_CONTOH.tempat}
                     </li>
                     <li className="sd-sched-item">
                       <IconUser width={16} height={16} className="sd-sched-icon" />
-                      Guru BK: {JADWAL.guru}
+                      Guru BK: {jadwal.guru}
                     </li>
                   </ul>
-                  <Link to="/siswa/riwayat" className="sd-sched-link">
+                  <Link to={`/siswa/riwayat/${jadwal.id}`} className="sd-sched-link">
                     Lihat Detail
                   </Link>
                 </div>
@@ -186,29 +271,33 @@ export default function DashboardSiswa() {
           {/* Aktivitas terakhir */}
           <Card>
             <CardHeader title="Aktivitas Terakhir" />
-            <ul className="sd-act-list">
-              {AKTIVITAS.map((a) => {
-                const { icon: Icon, cls } = AKTIVITAS_STYLE[a.tipe];
-                return (
-                  <li key={a.judul} className="sd-act-item">
-                    <span className={"sd-act-icon " + cls}>
-                      <Icon width={16} height={16} />
-                    </span>
-                    <div className="sd-act-body">
-                      <div className="sd-act-head">
-                        <p className="sd-act-title">{a.judul}</p>
-                        <span className="sd-act-time">{a.waktu}</span>
+            {aktivitas.length === 0 ? (
+              <p className="sd-empty">Belum ada aktivitas.</p>
+            ) : (
+              <ul className="sd-act-list">
+                {aktivitas.map((a) => {
+                  const { icon: Icon, cls } = AKTIVITAS_STYLE[a.tipe];
+                  return (
+                    <li key={a.key} className="sd-act-item">
+                      <span className={"sd-act-icon " + cls}>
+                        <Icon width={16} height={16} />
+                      </span>
+                      <div className="sd-act-body">
+                        <div className="sd-act-head">
+                          <p className="sd-act-title">{a.judul}</p>
+                          <span className="sd-act-time">{a.waktu}</span>
+                        </div>
+                        <p className="sd-act-text">{a.isi}</p>
                       </div>
-                      <p className="sd-act-text">{a.isi}</p>
-                    </div>
-                  </li>
-                );
-              })}
-            </ul>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
           </Card>
         </div>
 
-        {/* Kolom kanan: berita */}
+        {/* Kolom kanan: berita (masih data contoh) */}
         <Card className="sd-news">
           <CardHeader title="Berita & Artikel" />
           <div className="sd-pad">

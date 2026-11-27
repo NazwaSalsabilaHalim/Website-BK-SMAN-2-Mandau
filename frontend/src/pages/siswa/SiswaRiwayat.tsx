@@ -10,15 +10,15 @@ import {
 } from "lucide-react";
 import { useMemo, useState, type ReactNode } from "react";
 import { Link } from "react-router";
-import Breadcrumb from "../../components/bk/Breadcrumb";
+import Breadcrumb from "@/components/bk/Breadcrumb";
+import { KATEGORI_STYLE, formatTanggal } from "@/data/riwayatContoh";
 import {
-  KATEGORI_STYLE,
-  RIWAYAT,
-  STATUS_STYLE,
-  formatTanggal,
+  gayaStatus,
   hitungRingkasan,
-  type Status,
-} from "../../data/riwayatContoh";
+  useApi,
+  type Konseling,
+  type KonselingStatus,
+} from "@/lib/konselingApi";
 
 const PER_HALAMAN = 5;
 
@@ -46,15 +46,18 @@ function StatCard({
 }
 
 export default function SiswaRiwayat() {
+  const { data, error, loading } = useApi<Konseling[]>("/konseling");
+  const daftar = useMemo(() => data ?? [], [data]);
+
   const [cari, setCari] = useState("");
-  const [filter, setFilter] = useState<Status | "semua">("semua");
+  const [filter, setFilter] = useState<KonselingStatus | "semua">("semua");
   const [halaman, setHalaman] = useState(1);
 
-  const ringkasan = hitungRingkasan(RIWAYAT);
+  const ringkasan = hitungRingkasan(daftar);
 
   const hasil = useMemo(() => {
     const q = cari.trim().toLowerCase();
-    return RIWAYAT.filter((r) => {
+    return daftar.filter((r) => {
       if (filter !== "semua" && r.status !== filter) return false;
       if (!q) return true;
       return [
@@ -62,13 +65,13 @@ export default function SiswaRiwayat() {
         r.guru,
         r.topik,
         formatTanggal(r.tanggal),
-        STATUS_STYLE[r.status].label,
+        gayaStatus(r.status).label,
       ]
         .join(" ")
         .toLowerCase()
         .includes(q);
     });
-  }, [cari, filter]);
+  }, [daftar, cari, filter]);
 
   const totalHalaman = Math.max(1, Math.ceil(hasil.length / PER_HALAMAN));
   const aktif = Math.min(halaman, totalHalaman);
@@ -78,7 +81,9 @@ export default function SiswaRiwayat() {
   const keHalaman = (n: number) =>
     setHalaman(Math.min(Math.max(1, n), totalHalaman));
 
-  const tahun = new Date(RIWAYAT[RIWAYAT.length - 1].tanggal).getFullYear();
+  const pesanKosong = loading
+    ? "Memuat riwayat..."
+    : error || "Tidak ada riwayat yang cocok.";
 
   return (
     <div className="sr-page">
@@ -97,7 +102,7 @@ export default function SiswaRiwayat() {
         <StatCard
           label="Total pengajuan saya"
           nilai={ringkasan.total}
-          keterangan={`Januari - Desember ${tahun}`}
+          keterangan="Seluruh pengajuan"
           ikon={<FileText className="sr-icon-blue" />}
         />
         <StatCard
@@ -143,7 +148,7 @@ export default function SiswaRiwayat() {
             <select
               value={filter}
               onChange={(e) => {
-                setFilter(e.target.value as Status | "semua");
+                setFilter(e.target.value as KonselingStatus | "semua");
                 setHalaman(1);
               }}
               className="dashboard-select"
@@ -152,6 +157,7 @@ export default function SiswaRiwayat() {
               <option value="menunggu">Menunggu</option>
               <option value="disetujui">Disetujui</option>
               <option value="selesai">Selesai</option>
+              <option value="perlu_pertemuan_lanjutan">Perlu Pertemuan Lanjutan</option>
               <option value="ditolak">Ditolak</option>
             </select>
           </label>
@@ -172,17 +178,17 @@ export default function SiswaRiwayat() {
               {tampil.length === 0 ? (
                 <tr>
                   <td colSpan={5} className="sr-empty">
-                    Tidak ada riwayat yang cocok.
+                    {pesanKosong}
                   </td>
                 </tr>
               ) : (
                 tampil.map((r) => {
-                  const st = STATUS_STYLE[r.status];
+                  const st = gayaStatus(r.status);
                   return (
                     <tr key={r.id}>
                       <td className="sr-date">{formatTanggal(r.tanggal)}</td>
                       <td>
-                        <span className={"sr-badge " + KATEGORI_STYLE[r.kategori]}>
+                        <span className={"sr-badge " + (KATEGORI_STYLE[r.kategori] ?? "")}>
                           {r.kategori}
                         </span>
                       </td>

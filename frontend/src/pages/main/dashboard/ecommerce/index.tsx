@@ -7,68 +7,59 @@ import {
   Newspaper,
   Plus,
   Printer,
-  TrendingUp,
   UserPlus,
   Users,
 } from "lucide-react";
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { Link } from "react-router";
+import { inisial } from "@/data/guruContoh";
+import { useApi, type Konseling, type KonselingStatus } from "@/lib/konselingApi";
 
-/* -----------------------------------------------------------
-   DATA CONTOH. Nanti diganti data dari API.
-   ----------------------------------------------------------- */
-type StatusAktivitas = "selesai" | "berjalan" | "menunggu";
-
-type Aktivitas = {
-  nama: string;
-  kelas: string;
-  layanan: string;
-  waktu: string;
-  status: StatusAktivitas;
-};
-
-const RINGKASAN = {
-  totalSiswa: 1248,
-  totalGuruBk: 8,
-  permohonan: 24,
-  totalBerita: 15,
-};
-
-const AKTIVITAS: Aktivitas[] = [
-  { nama: "Andi Saputra", kelas: "XI MIPA 2", layanan: "Konseling Karir", waktu: "10:30 WIB", status: "selesai" },
-  { nama: "Rina Mahendra", kelas: "X IPS 1", layanan: "Masalah Pribadi", waktu: "09:15 WIB", status: "berjalan" },
-  { nama: "Budi Julianto", kelas: "XII BB 2", layanan: "Pelanggaran Disiplin", waktu: "08:00 WIB", status: "menunggu" },
-  { nama: "Siska Putri", kelas: "XI IPS 4", layanan: "Konseling Belajar", waktu: "Kemarin", status: "selesai" },
-];
-
-const TREN = [
-  { hari: "Sen", nilai: 8 },
-  { hari: "Sel", nilai: 12 },
-  { hari: "Rab", nilai: 6 },
-  { hari: "Kam", nilai: 15 },
-  { hari: "Jum", nilai: 10 },
-];
+type StatusAktivitas = "selesai" | "berjalan" | "menunggu" | "ditolak";
 
 const STATUS_STYLE: Record<StatusAktivitas, { label: string; cls: string }> = {
   selesai: { label: "SELESAI", cls: "badge-status-selesai" },
   berjalan: { label: "BERJALAN", cls: "badge-status-menunggu" },
   menunggu: { label: "MENUNGGU", cls: "badge-status-ditolak" },
+  ditolak: { label: "DITOLAK", cls: "badge-status-ditolak" },
 };
 
 const AVATAR_STYLE = ["avatar-col-1", "avatar-col-0", "avatar-col-4", "avatar-col-1"];
+
+const HARI = ["Sen", "Sel", "Rab", "Kam", "Jum"];
 
 /* -----------------------------------------------------------
    Helper
    ----------------------------------------------------------- */
 const angka = (n: number) => new Intl.NumberFormat("id-ID").format(n);
 
-const inisial = (nama: string) =>
-  nama
-    .split(" ")
-    .filter(Boolean)
-    .slice(0, 2)
-    .map((k) => k.charAt(0).toUpperCase())
-    .join("");
+/** Jumlah item dari respons list (array biasa atau { data: [...] }). */
+function jumlah(d: unknown): number {
+  if (Array.isArray(d)) return d.length;
+  const dalam = (d as { data?: unknown } | null)?.data;
+  return Array.isArray(dalam) ? dalam.length : 0;
+}
+
+const keStatusAktivitas = (s: KonselingStatus): StatusAktivitas =>
+  s === "selesai" ? "selesai" : s === "menunggu" ? "menunggu" : s === "ditolak" ? "ditolak" : "berjalan";
+
+/** "10:30 WIB" kalau hari ini, "Kemarin", atau "20 Nov". */
+function labelWaktu(iso: string, sekarang: Date) {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  const hari = (x: Date) => x.toLocaleDateString("en-CA");
+  const kemarin = new Date(sekarang);
+  kemarin.setDate(kemarin.getDate() - 1);
+
+  if (hari(d) === hari(sekarang)) {
+    const jam = d
+      .toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit", hour12: false })
+      .replace(".", ":");
+    return `${jam} WIB`;
+  }
+  if (hari(d) === hari(kemarin)) return "Kemarin";
+  return d.toLocaleDateString("id-ID", { day: "numeric", month: "short" });
+}
 
 /* -----------------------------------------------------------
    Komponen kecil
@@ -113,7 +104,30 @@ function TombolCepat({ to, label, ikon }: TombolCepatProps) {
    Halaman
    ----------------------------------------------------------- */
 export default function AdminDashboardPage() {
-  const maks = Math.max(...TREN.map((t) => t.nilai));
+  const { data: konseling } = useApi<Konseling[]>("/konseling");
+  const { data: siswa } = useApi<unknown>("/siswa");
+  const { data: guru } = useApi<unknown>("/guru-bk");
+  const { data: berita } = useApi<unknown>("/berita");
+
+  const [sekarang] = useState(() => new Date());
+  const daftar = konseling ?? [];
+
+  const menunggu = daftar.filter((k) => k.status === "menunggu").length;
+
+  // Tren minggu ini (Senin sampai Jumat), dihitung dari tanggal sesi
+  const senin = new Date(sekarang);
+  senin.setDate(senin.getDate() - ((senin.getDay() + 6) % 7));
+  const tren = HARI.map((hari, i) => {
+    const t = new Date(senin);
+    t.setDate(senin.getDate() + i);
+    const tgl = t.toLocaleDateString("en-CA");
+    return { hari, nilai: daftar.filter((k) => k.tanggal === tgl).length };
+  });
+  const maks = Math.max(1, ...tren.map((t) => t.nilai));
+
+  const aktivitas = [...daftar]
+    .sort((a, b) => Date.parse(b.diperbarui) - Date.parse(a.diperbarui))
+    .slice(0, 4);
 
   return (
     <>
@@ -141,33 +155,26 @@ export default function AdminDashboardPage() {
         <div className="dash-stat-grid">
           <StatCard
             label="Total Siswa"
-            nilai={angka(RINGKASAN.totalSiswa)}
+            nilai={angka(jumlah(siswa))}
             ikon={<Users className="size-5" />}
             ikonCls="dash-icon-blue"
-            kanan={
-              <span className="dash-trend-up">
-                <TrendingUp className="size-3.5" />
-                +12
-              </span>
-            }
           />
           <StatCard
             label="Total Guru BK"
-            nilai={angka(RINGKASAN.totalGuruBk)}
+            nilai={angka(jumlah(guru))}
             ikon={<GraduationCap className="size-5" />}
             ikonCls="dash-icon-orange"
-            kanan={<span className="dash-stat-note">Tetap</span>}
           />
           <StatCard
-            label="Permohonan Konseling"
-            nilai={angka(RINGKASAN.permohonan)}
+            label="Permohonan Menunggu"
+            nilai={angka(menunggu)}
             ikon={<MessageSquare className="size-5" />}
             ikonCls="dash-icon-red"
-            kanan={<span className="dash-stat-pill">Perlu Respon</span>}
+            kanan={menunggu > 0 ? <span className="dash-stat-pill">Perlu Respon</span> : undefined}
           />
           <StatCard
             label="Total Berita"
-            nilai={angka(RINGKASAN.totalBerita)}
+            nilai={angka(jumlah(berita))}
             ikon={<Newspaper className="size-5" />}
             ikonCls="dash-icon-gray"
           />
@@ -194,29 +201,39 @@ export default function AdminDashboardPage() {
                   </tr>
                 </thead>
                 <tbody className="dash-tbody">
-                  {AKTIVITAS.map((a, i) => {
-                    const st = STATUS_STYLE[a.status];
-                    return (
-                      <tr key={a.nama}>
-                        <td>
-                          <div className="dash-person">
-                            <span className={`dash-avatar ${AVATAR_STYLE[i % AVATAR_STYLE.length]}`}>
-                              {inisial(a.nama)}
-                            </span>
-                            <div>
-                              <p className="dash-person-name">{a.nama}</p>
-                              <p className="dash-person-sub">{a.kelas}</p>
+                  {aktivitas.length === 0 ? (
+                    <tr>
+                      <td colSpan={4} className="dash-td-service">
+                        Belum ada aktivitas konseling.
+                      </td>
+                    </tr>
+                  ) : (
+                    aktivitas.map((a, i) => {
+                      const st = STATUS_STYLE[keStatusAktivitas(a.status)];
+                      return (
+                        <tr key={a.id}>
+                          <td>
+                            <div className="dash-person">
+                              <span
+                                className={`dash-avatar ${AVATAR_STYLE[i % AVATAR_STYLE.length]}`}
+                              >
+                                {inisial(a.siswa)}
+                              </span>
+                              <div>
+                                <p className="dash-person-name">{a.siswa}</p>
+                                <p className="dash-person-sub">{a.kelas}</p>
+                              </div>
                             </div>
-                          </div>
-                        </td>
-                        <td className="dash-td-service">{a.layanan}</td>
-                        <td className="dash-td-time">{a.waktu}</td>
-                        <td>
-                          <span className={`dash-badge ${st.cls}`}>{st.label}</span>
-                        </td>
-                      </tr>
-                    );
-                  })}
+                          </td>
+                          <td className="dash-td-service">{a.kategori}</td>
+                          <td className="dash-td-time">{labelWaktu(a.diperbarui, sekarang)}</td>
+                          <td>
+                            <span className={`dash-badge ${st.cls}`}>{st.label}</span>
+                          </td>
+                        </tr>
+                      );
+                    })
+                  )}
                 </tbody>
               </table>
             </div>
@@ -227,12 +244,12 @@ export default function AdminDashboardPage() {
             <section className="dashboard-card dash-trend-card">
               <h2 className="dash-trend-title">Tren Konseling (Minggu Ini)</h2>
               <div className="dash-chart">
-                {TREN.map((t) => (
+                {tren.map((t) => (
                   <div key={t.hari} className="dash-chart-col">
                     <div className="dash-chart-track">
                       <div
                         title={`${t.hari}: ${t.nilai} sesi`}
-                        className={`dash-bar ${t.nilai === maks ? "dash-bar-max" : "dash-bar-normal"}`}
+                        className={`dash-bar ${t.nilai === maks && t.nilai > 0 ? "dash-bar-max" : "dash-bar-normal"}`}
                         style={{ height: `${(t.nilai / maks) * 100}%` }}
                       />
                     </div>
@@ -253,7 +270,6 @@ export default function AdminDashboardPage() {
                 <TombolCepat to="/admin/blast" label="Kirim Blast" ikon={<Mail className="size-5" />} />
               </div>
             </section>
-
           </div>
         </div>
 
@@ -277,4 +293,4 @@ export default function AdminDashboardPage() {
       </div>
     </>
   );
-}
+} 

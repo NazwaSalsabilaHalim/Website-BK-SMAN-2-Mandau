@@ -1,20 +1,7 @@
 import { PageMeta } from "@/components/shared/page-meta";
-import {
-  ALASAN_TOLAK_CONTOH,
-  KATEGORI,
-  KATEGORI_STYLE,
-  type Kategori,
-} from "@/data/riwayatContoh";
-import {
-  PERMOHONAN,
-  formatJadwal,
-  formatTanggalPendek,
-  hasilAwal,
-  inisial,
-  profilSiswa,
-  type Permohonan,
-  type StatusPermohonan,
-} from "@/data/guruContoh";
+import { KATEGORI, KATEGORI_STYLE } from "@/data/riwayatContoh";
+import { formatJadwal, formatTanggalPendek, inisial } from "@/data/guruContoh";
+import { punyaHasil, useApi, type Konseling, type KonselingStatus } from "@/lib/konselingApi";
 import {
   ChevronLeft,
   ChevronRight,
@@ -27,42 +14,25 @@ import {
   Search,
   X,
 } from "lucide-react";
-import { useState, type KeyboardEvent, type ReactNode } from "react";
-
-/* -----------------------------------------------------------
-   DATA CONTOH: memakai dataset yang sama dengan halaman guru BK.
-   Nanti diganti API (GET /api/konseling dengan filter) milik admin.
-   ----------------------------------------------------------- */
-type Baris = Permohonan & { guru: string };
-
-// Contoh penugasan guru berdasarkan kategori. Nanti dari relasi guru_bk_id di database.
-const GURU_KATEGORI: Record<Kategori, string> = {
-  Akademik: "Dra. Hj. Siti Aminah",
-  Pribadi: "Siska Maharani, S.Psi.",
-  Karier: "Rahmat Hidayat, S.Pd.",
-  Sosial: "Budi Santoso, S.Psi.",
-};
-
-const DATA: Baris[] = PERMOHONAN.map((p) => ({ ...p, guru: GURU_KATEGORI[p.jenis] }));
-const DAFTAR_GURU = [...new Set(DATA.map((d) => d.guru))].sort();
+import { useMemo, useState, type KeyboardEvent, type ReactNode } from "react";
 
 const PER_HALAMAN = 5;
 
 /* -----------------------------------------------------------
    Gaya dan helper
    ----------------------------------------------------------- */
-const STATUS_LABEL: Record<StatusPermohonan, string> = {
+const STATUS_LABEL: Record<KonselingStatus, string> = {
   menunggu: "Menunggu",
   disetujui: "Disetujui",
-  lanjutan: "Perlu Pertemuan Lanjutan",
+  perlu_pertemuan_lanjutan: "Perlu Pertemuan Lanjutan",
   selesai: "Selesai",
   ditolak: "Ditolak",
 };
 
-const STATUS_STYLE: Record<StatusPermohonan, { badge: string; dot: string }> = {
+const STATUS_STYLE: Record<KonselingStatus, { badge: string; dot: string }> = {
   menunggu: { badge: "tint-orange-700", dot: "dot-orange-500" },
   disetujui: { badge: "tint-blue-700", dot: "dot-blue-600" },
-  lanjutan: { badge: "tint-amber-800", dot: "dot-amber-600" },
+  perlu_pertemuan_lanjutan: { badge: "tint-amber-800", dot: "dot-amber-600" },
   selesai: { badge: "tint-green-700", dot: "dot-green-600" },
   ditolak: { badge: "tint-red-700", dot: "dot-red-600" },
 };
@@ -134,6 +104,13 @@ function Bagian({ judul, children }: { judul: string; children: ReactNode }) {
    Halaman
    ----------------------------------------------------------- */
 export default function AdminPermohonanPage() {
+  const { data, error, loading } = useApi<Konseling[]>("/konseling");
+  const DATA = useMemo(() => data ?? [], [data]);
+  const daftarGuru = useMemo(
+    () => [...new Set(DATA.map((d) => d.guru).filter(Boolean))].sort(),
+    [DATA],
+  );
+
   const [cari, setCari] = useState("");
   const [kategori, setKategori] = useState("semua");
   const [status, setStatus] = useState("semua");
@@ -142,18 +119,20 @@ export default function AdminPermohonanPage() {
   const [dari, setDari] = useState("");
   const [sampai, setSampai] = useState("");
   const [halaman, setHalaman] = useState(1);
-  const [detail, setDetail] = useState<Baris | null>(null);
+  const [detail, setDetail] = useState<Konseling | null>(null);
 
   const total = DATA.length;
   const menunggu = DATA.filter((d) => d.status === "menunggu").length;
   const selesai = DATA.filter((d) => d.status === "selesai").length;
-  const berjalan = DATA.filter((d) => d.status === "disetujui" || d.status === "lanjutan").length;
+  const berjalan = DATA.filter(
+    (d) => d.status === "disetujui" || d.status === "perlu_pertemuan_lanjutan",
+  ).length;
 
   const hasil = DATA.filter((d) => {
     const q = cari.trim().toLowerCase();
     return (
-      (!q || d.nama.toLowerCase().includes(q)) &&
-      (kategori === "semua" || d.jenis === kategori) &&
+      (!q || d.siswa.toLowerCase().includes(q)) &&
+      (kategori === "semua" || d.kategori === kategori) &&
       (status === "semua" || d.status === status) &&
       (guru === "semua" || d.guru === guru) &&
       (!dari || d.tanggal >= dari) &&
@@ -187,9 +166,9 @@ export default function AdminPermohonanPage() {
       ["Tanggal", "Nama Siswa", "Kelas", "Kategori", "Topik", "Guru BK", "Status"],
       ...hasil.map((d) => [
         formatTanggalPendek(d.tanggal),
-        d.nama,
+        d.siswa,
         d.kelas,
-        d.jenis,
+        d.kategori,
         d.topik,
         d.guru,
         STATUS_LABEL[d.status],
@@ -212,9 +191,10 @@ export default function AdminPermohonanPage() {
     if (e.key === "Escape") setDetail(null);
   }
 
-  const profil = detail ? profilSiswa(detail) : null;
-  const hasilSesi = detail ? hasilAwal(detail) : null;
-  const sudahSesi = detail?.status === "selesai" || detail?.status === "lanjutan";
+  const sudahSesi = detail ? punyaHasil(detail.status) : false;
+  const pesanKosong = loading
+    ? "Memuat data..."
+    : error || "Tidak ada data konseling yang cocok.";
 
   return (
     <>
@@ -231,7 +211,7 @@ export default function AdminPermohonanPage() {
               Riwayat Konseling
             </h1>
             <p className="mt-0.5 text-sm text-gray-600 dark:text-gray-400">
-              Tinjau dan kelola riwayat sesi konseling seluruh siswa.
+              Pantau riwayat sesi konseling seluruh siswa.
             </p>
           </div>
           <button
@@ -306,7 +286,7 @@ export default function AdminPermohonanPage() {
               className="field-select"
             >
               <option value="semua">Semua Status</option>
-              {(Object.keys(STATUS_LABEL) as StatusPermohonan[]).map((s) => (
+              {(Object.keys(STATUS_LABEL) as KonselingStatus[]).map((s) => (
                 <option key={s} value={s}>{STATUS_LABEL[s]}</option>
               ))}
             </select>
@@ -349,7 +329,7 @@ export default function AdminPermohonanPage() {
                 className="field-select"
               >
                 <option value="semua">Semua Guru BK</option>
-                {DAFTAR_GURU.map((g) => (
+                {daftarGuru.map((g) => (
                   <option key={g} value={g}>{g}</option>
                 ))}
               </select>
@@ -399,7 +379,7 @@ export default function AdminPermohonanPage() {
                 {tampil.length === 0 ? (
                   <tr>
                     <td colSpan={6} className="px-5 py-10 text-center text-sm text-gray-500">
-                      Tidak ada data konseling yang cocok.
+                      {pesanKosong}
                     </td>
                   </tr>
                 ) : (
@@ -418,10 +398,10 @@ export default function AdminPermohonanPage() {
                                 AVATAR[(mulai + i) % AVATAR.length]
                               }
                             >
-                              {inisial(d.nama)}
+                              {inisial(d.siswa)}
                             </span>
                             <span className="font-medium text-gray-900 dark:text-white/90">
-                              {d.nama}
+                              {d.siswa}
                             </span>
                           </div>
                         </td>
@@ -429,10 +409,10 @@ export default function AdminPermohonanPage() {
                           <span
                             className={
                               "rounded px-2 py-0.5 text-[10px] font-bold uppercase " +
-                              KATEGORI_STYLE[d.jenis]
+                              (KATEGORI_STYLE[d.kategori] ?? "")
                             }
                           >
-                            {d.jenis}
+                            {d.kategori}
                           </span>
                         </td>
                         <td className="px-3 py-4 text-gray-700 dark:text-gray-300">{d.guru}</td>
@@ -451,7 +431,7 @@ export default function AdminPermohonanPage() {
                           <button
                             type="button"
                             onClick={() => setDetail(d)}
-                            aria-label={`Detail konseling ${d.nama}`}
+                            aria-label={`Detail konseling ${d.siswa}`}
                             className="text-xs font-semibold text-blue-800 hover:underline dark:text-blue-400"
                           >
                             Detail
@@ -516,7 +496,7 @@ export default function AdminPermohonanPage() {
       </div>
 
       {/* Dialog detail (hanya baca) */}
-      {detail && profil && hasilSesi && (
+      {detail && (
         <div
           className="fixed inset-0 z-99999 grid place-items-start overflow-y-auto bg-gray-900/50 p-4 sm:place-items-center"
           onKeyDown={tekan}
@@ -552,11 +532,11 @@ export default function AdminPermohonanPage() {
 
             <dl className="mt-5 grid gap-4 sm:grid-cols-2">
               {[
-                ["Siswa", `${detail.nama} (${detail.kelas})`],
-                ["NISN", profil.nisn],
-                ["Kategori", detail.jenis],
+                ["Siswa", `${detail.siswa} (${detail.kelas})`],
+                ["NIS", detail.nis || "-"],
+                ["Kategori", detail.kategori],
                 ["Guru BK", detail.guru],
-                ["Jadwal", formatJadwal(detail.tanggal, detail.jam)],
+                ["Jadwal", formatJadwal(detail.tanggal, detail.waktu)],
                 ["Status", STATUS_LABEL[detail.status]],
               ].map(([k, v]) => (
                 <div key={k}>
@@ -569,17 +549,24 @@ export default function AdminPermohonanPage() {
             </dl>
 
             <div className="mt-5 space-y-4 border-t border-gray-200 pt-5 dark:border-gray-800">
-              <Bagian judul="Deskripsi Masalah (Siswa)">{profil.deskripsi}</Bagian>
+              <Bagian judul="Deskripsi Masalah (Siswa)">{detail.deskripsi}</Bagian>
 
               {sudahSesi && (
                 <>
-                  <Bagian judul="Deskripsi Kegiatan">{hasilSesi.deskripsi}</Bagian>
-                  <Bagian judul="Hasil Kegiatan">{hasilSesi.hasil}</Bagian>
-                  <Bagian judul="Evaluasi dan Tindak Lanjut">{hasilSesi.evaluasi}</Bagian>
+                  <Bagian judul="Deskripsi Kegiatan">{detail.deskripsi_kegiatan || "-"}</Bagian>
+                  <Bagian judul="Hasil Kegiatan">{detail.hasil_konseling || "-"}</Bagian>
+                  <Bagian judul="Evaluasi dan Tindak Lanjut">{detail.evaluasi || "-"}</Bagian>
+                  {detail.rencana_tindak_lanjut.length > 0 && (
+                    <Bagian judul="Rencana Tindakan">
+                      {detail.rencana_tindak_lanjut
+                        .map((r) => `${r.judul}: ${r.isi}`)
+                        .join("\n")}
+                    </Bagian>
+                  )}
                 </>
               )}
               {detail.status === "ditolak" && (
-                <Bagian judul="Alasan Penolakan">{ALASAN_TOLAK_CONTOH}</Bagian>
+                <Bagian judul="Alasan Penolakan">{detail.alasan_penolakan || "-"}</Bagian>
               )}
               {!sudahSesi && detail.status !== "ditolak" && (
                 <p className="rounded-md bg-gray-50 px-3 py-2 text-xs text-gray-600 ring-1 ring-gray-200 dark:bg-white/5 dark:text-gray-400 dark:ring-gray-800">

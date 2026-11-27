@@ -1,29 +1,35 @@
 import { ChevronLeft, ChevronRight, Check, ListFilter, X } from "lucide-react";
 import { useState, type KeyboardEvent } from "react";
 import { Link } from "react-router";
+import { STATUS_PERMOHONAN, formatJadwal } from "@/data/guruContoh";
+import { KATEGORI, KATEGORI_STYLE } from "@/data/riwayatContoh";
 import {
-  AKTIF,
-  PERMOHONAN,
-  STATUS_PERMOHONAN,
-  formatJadwal,
-  type Permohonan,
-  type StatusPermohonan,
-} from "../../data/guruContoh";
-import { KATEGORI, KATEGORI_STYLE } from "../../data/riwayatContoh";
+  apiFetch,
+  useApi,
+  type Konseling,
+  type KonselingStatus,
+} from "@/lib/konselingApi";
 
 const PER_HALAMAN = 5;
 
 type Tab = "aktif" | "riwayat";
 
-const STATUS_PER_TAB: Record<Tab, StatusPermohonan[]> = {
-  aktif: ["menunggu", "disetujui", "lanjutan"],
+const STATUS_PER_TAB: Record<Tab, KonselingStatus[]> = {
+  aktif: ["menunggu", "disetujui", "perlu_pertemuan_lanjutan"],
   riwayat: ["selesai", "ditolak"],
 };
 
+/** Gaya status halaman guru (kunci "lanjutan" di data lama = perlu_pertemuan_lanjutan di API). */
+const gayaGuru = (s: KonselingStatus) =>
+  STATUS_PERMOHONAN[s === "perlu_pertemuan_lanjutan" ? "lanjutan" : s];
+
 export default function GuruPermohonan() {
-  // Data disalin ke state supaya tombol terima/tolak langsung terlihat.
-  // TODO: ganti dengan data dari API dan PATCH /api/konseling/{id}.
-  const [data, setData] = useState<Permohonan[]>(PERMOHONAN);
+  const { data, error, loading } = useApi<Konseling[]>("/konseling");
+
+  // Perubahan dari tombol terima/tolak ditimpakan di atas data dari server
+  const [ubahan, setUbahan] = useState<Record<number, Konseling>>({});
+  const semua = (data ?? []).map((d) => ubahan[d.id] ?? d);
+
   const [tab, setTab] = useState<Tab>("aktif");
 
   // Pilihan filter (belum berlaku) dan filter yang sudah diterapkan
@@ -33,17 +39,19 @@ export default function GuruPermohonan() {
   const [halaman, setHalaman] = useState(1);
 
   const [notif, setNotif] = useState("");
+  const [galat, setGalat] = useState("");
+  const [proses, setProses] = useState<number | null>(null);
   const [tolakId, setTolakId] = useState<number | null>(null);
   const [alasan, setAlasan] = useState("");
   const [alasanError, setAlasanError] = useState("");
 
-  const jumlahAktif = data.filter((d) => AKTIF.includes(d.status)).length;
-  const jumlahRiwayat = data.length - jumlahAktif;
+  const jumlahAktif = semua.filter((d) => STATUS_PER_TAB.aktif.includes(d.status)).length;
+  const jumlahRiwayat = semua.length - jumlahAktif;
 
-  const daftar = data.filter((d) => {
+  const daftar = semua.filter((d) => {
     const dalamTab = STATUS_PER_TAB[tab].includes(d.status);
     const cocokStatus = filter.status === "semua" || d.status === filter.status;
-    const cocokJenis = filter.jenis === "semua" || d.jenis === filter.jenis;
+    const cocokJenis = filter.jenis === "semua" || d.kategori === filter.jenis;
     return dalamTab && cocokStatus && cocokJenis;
   });
 
@@ -51,6 +59,10 @@ export default function GuruPermohonan() {
   const aktifHal = Math.min(halaman, totalHalaman);
   const mulai = (aktifHal - 1) * PER_HALAMAN;
   const tampil = daftar.slice(mulai, mulai + PER_HALAMAN);
+
+  function simpan(baru: Konseling) {
+    setUbahan((u) => ({ ...u, [baru.id]: baru }));
+  }
 
   function gantiTab(t: Tab) {
     setTab(t);
@@ -65,11 +77,21 @@ export default function GuruPermohonan() {
     setHalaman(1);
   }
 
-  function setuju(p: Permohonan) {
-    setData((list) =>
-      list.map((d) => (d.id === p.id ? { ...d, status: "disetujui" } : d)),
-    );
-    setNotif(`Permohonan ${p.nama} disetujui.`);
+  async function setuju(p: Konseling) {
+    setGalat("");
+    setProses(p.id);
+    try {
+      const baru = await apiFetch<Konseling>(`/konseling/${p.id}/status`, {
+        method: "PATCH",
+        body: { status: "disetujui" },
+      });
+      simpan(baru);
+      setNotif(`Permohonan ${p.siswa} disetujui.`);
+    } catch (err) {
+      setGalat(err instanceof Error ? err.message : "Gagal menyetujui permohonan.");
+    } finally {
+      setProses(null);
+    }
   }
 
   function bukaTolak(id: number) {
@@ -78,24 +100,37 @@ export default function GuruPermohonan() {
     setAlasanError("");
   }
 
-  function konfirmasiTolak() {
+  async function konfirmasiTolak() {
+    if (tolakId === null) return;
     if (alasan.trim().length < 10) {
       setAlasanError("Tulis alasan penolakan (minimal 10 karakter).");
       return;
     }
-    const target = data.find((d) => d.id === tolakId);
-    setData((list) =>
-      list.map((d) => (d.id === tolakId ? { ...d, status: "ditolak" } : d)),
-    );
-    if (target) setNotif(`Permohonan ${target.nama} ditolak.`);
-    setTolakId(null);
+    setGalat("");
+    setProses(tolakId);
+    try {
+      const baru = await apiFetch<Konseling>(`/konseling/${tolakId}/status`, {
+        method: "PATCH",
+        body: { status: "ditolak", alasan_penolakan: alasan.trim() },
+      });
+      simpan(baru);
+      setNotif(`Permohonan ${baru.siswa} ditolak.`);
+      setTolakId(null);
+    } catch (err) {
+      setAlasanError(err instanceof Error ? err.message : "Gagal menolak permohonan.");
+    } finally {
+      setProses(null);
+    }
   }
 
   function tekanTombol(e: KeyboardEvent) {
     if (e.key === "Escape") setTolakId(null);
   }
 
-  const target = data.find((d) => d.id === tolakId);
+  const target = semua.find((d) => d.id === tolakId);
+  const pesanKosong = loading
+    ? "Memuat permohonan..."
+    : error || "Tidak ada permohonan yang cocok.";
 
   return (
     <div className="gp-page">
@@ -134,6 +169,12 @@ export default function GuruPermohonan() {
         </p>
       )}
 
+      {galat && (
+        <p role="alert" className="frm-error">
+          {galat}
+        </p>
+      )}
+
       {/* Filter */}
       <div className="gp-filter">
         <span className="gp-filter-label">FILTER BY:</span>
@@ -146,7 +187,7 @@ export default function GuruPermohonan() {
           <option value="semua">Semua Status</option>
           {STATUS_PER_TAB[tab].map((s) => (
             <option key={s} value={s}>
-              {STATUS_PERMOHONAN[s].label}
+              {gayaGuru(s).label}
             </option>
           ))}
         </select>
@@ -188,23 +229,23 @@ export default function GuruPermohonan() {
               {tampil.length === 0 ? (
                 <tr>
                   <td colSpan={7} className="gp-empty">
-                    Tidak ada permohonan yang cocok.
+                    {pesanKosong}
                   </td>
                 </tr>
               ) : (
                 tampil.map((p) => {
-                  const st = STATUS_PERMOHONAN[p.status];
+                  const st = gayaGuru(p.status);
                   return (
                     <tr key={p.id}>
-                      <td className="gp-name">{p.nama}</td>
+                      <td className="gp-name">{p.siswa}</td>
                       <td className="gp-muted">{p.kelas}</td>
                       <td>
-                        <span className={"badge-sq-tight " + KATEGORI_STYLE[p.jenis]}>
-                          {p.jenis}
+                        <span className={"badge-sq-tight " + (KATEGORI_STYLE[p.kategori] ?? "")}>
+                          {p.kategori}
                         </span>
                       </td>
                       <td className="gp-topic">{p.topik}</td>
-                      <td className="gp-muted">{formatJadwal(p.tanggal, p.jam)}</td>
+                      <td className="gp-muted">{formatJadwal(p.tanggal, p.waktu)}</td>
                       <td>
                         <span className={"gp-status " + st.teks}>
                           <span className={"dot " + st.dot} />
@@ -220,8 +261,9 @@ export default function GuruPermohonan() {
                             <>
                               <button
                                 type="button"
-                                onClick={() => setuju(p)}
-                                aria-label={`Setujui permohonan ${p.nama}`}
+                                onClick={() => void setuju(p)}
+                                disabled={proses === p.id}
+                                aria-label={`Setujui permohonan ${p.siswa}`}
                                 title="Setujui"
                                 className="gp-approve"
                               >
@@ -230,7 +272,8 @@ export default function GuruPermohonan() {
                               <button
                                 type="button"
                                 onClick={() => bukaTolak(p.id)}
-                                aria-label={`Tolak permohonan ${p.nama}`}
+                                disabled={proses === p.id}
+                                aria-label={`Tolak permohonan ${p.siswa}`}
                                 title="Tolak"
                                 className="gp-reject"
                               >
@@ -303,7 +346,7 @@ export default function GuruPermohonan() {
               Tolak permohonan
             </h2>
             <p className="copy-sub-1">
-              {target.nama} • {target.topik}
+              {target.siswa} • {target.topik}
             </p>
             <label htmlFor="alasan-tolak" className="gp-dlg-label">
               Alasan penolakan
@@ -329,8 +372,13 @@ export default function GuruPermohonan() {
               <button type="button" onClick={() => setTolakId(null)} className="btn-cancel">
                 Batal
               </button>
-              <button type="button" onClick={konfirmasiTolak} className="btn-danger">
-                Tolak Permohonan
+              <button
+                type="button"
+                onClick={() => void konfirmasiTolak()}
+                disabled={proses === target.id}
+                className="btn-danger"
+              >
+                {proses === target.id ? "Memproses..." : "Tolak Permohonan"}
               </button>
             </div>
           </div>

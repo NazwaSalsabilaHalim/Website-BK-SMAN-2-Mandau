@@ -42,13 +42,20 @@ class AuthController extends Controller
         return response()->json(['user' => $this->userPayload($request->user())]);
     }
 
-    private function userPayload(User $user): array
+        private function userPayload(User $user): array
     {
-        return [
+        $payload = [
             'id' => $user->id,
             'name' => $user->name,
             'username' => $user->username,
             'role' => $user->role,
         ];
+
+        if ($user->role === 'siswa') {
+            $payload['nis'] = $user->siswa?->nis ?? '';
+            $payload['kelas'] = $user->siswa?->kelas ?? '';
+        }
+
+        return $payload;
     }
 }

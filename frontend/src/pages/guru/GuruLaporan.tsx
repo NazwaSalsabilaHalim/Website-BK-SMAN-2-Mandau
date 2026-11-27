@@ -10,26 +10,55 @@ import { useMemo, useState } from "react";
 import { Link } from "react-router";
 import {
   AVATAR_STYLE,
-  PERMOHONAN,
   STATUS_PERMOHONAN,
-  buatCsv,
   formatTanggalPendek,
   inisial,
   semesterDari,
-} from "../../data/guruContoh";
-import { KATEGORI, KATEGORI_STYLE } from "../../data/riwayatContoh";
+} from "@/data/guruContoh";
+import { KATEGORI, KATEGORI_STYLE } from "@/data/riwayatContoh";
+import { punyaHasil, useApi, type Konseling } from "@/lib/konselingApi";
 
 const PER_HALAMAN = 5;
 
-// Laporan hanya memuat sesi yang sudah dilakukan (selesai atau perlu lanjutan), terbaru di atas.
-const REKAMAN = PERMOHONAN.filter(
-  (p) => p.status === "selesai" || p.status === "lanjutan",
-).sort((a, b) => (a.tanggal < b.tanggal ? 1 : -1));
+/** Kunci "lanjutan" di data lama = perlu_pertemuan_lanjutan di API. */
+const gayaGuru = (s: Konseling["status"]) =>
+  STATUS_PERMOHONAN[s === "perlu_pertemuan_lanjutan" ? "lanjutan" : s];
 
-const SEMESTER = [...new Set(REKAMAN.map((r) => semesterDari(r.tanggal)))];
-const KELAS = [...new Set(REKAMAN.map((r) => r.kelas))].sort();
+/** CSV (dengan BOM agar terbaca benar di Excel) untuk unduh laporan. */
+function buatCsv(rows: Konseling[]) {
+  const esc = (v: string) => `"${v.replace(/"/g, '""')}"`;
+  const header = ["Nama Siswa", "Kelas", "Jenis Layanan", "Tanggal", "Status"];
+  const baris = rows.map((r) =>
+    [r.siswa, r.kelas, r.kategori, formatTanggalPendek(r.tanggal), gayaGuru(r.status).label]
+      .map(esc)
+      .join(","),
+  );
+  return "\uFEFF" + [header.map(esc).join(","), ...baris].join("\r\n");
+}
 
 export default function GuruLaporan() {
+  const { data, error, loading } = useApi<Konseling[]>("/konseling");
+
+  // Laporan hanya memuat sesi yang sudah dilakukan (selesai atau perlu lanjutan), terbaru di atas.
+  const rekaman = useMemo(
+    () =>
+      (data ?? [])
+        .filter((k) => punyaHasil(k.status))
+        .sort((a, b) =>
+          a.tanggal === b.tanggal ? b.id - a.id : a.tanggal < b.tanggal ? 1 : -1,
+        ),
+    [data],
+  );
+
+  const daftarSemester = useMemo(
+    () => [...new Set(rekaman.map((r) => semesterDari(r.tanggal)))],
+    [rekaman],
+  );
+  const daftarKelas = useMemo(
+    () => [...new Set(rekaman.map((r) => r.kelas))].sort(),
+    [rekaman],
+  );
+
   const [semester, setSemester] = useState("semua");
   const [kelas, setKelas] = useState("semua");
   const [jenis, setJenis] = useState("semua");
@@ -37,19 +66,19 @@ export default function GuruLaporan() {
 
   const hasil = useMemo(
     () =>
-      REKAMAN.filter(
+      rekaman.filter(
         (r) =>
           (semester === "semua" || semesterDari(r.tanggal) === semester) &&
           (kelas === "semua" || r.kelas === kelas) &&
-          (jenis === "semua" || r.jenis === jenis),
+          (jenis === "semua" || r.kategori === jenis),
       ),
-    [semester, kelas, jenis],
+    [rekaman, semester, kelas, jenis],
   );
 
   const total = hasil.length;
-  const akademik = hasil.filter((r) => r.jenis === "Akademik").length;
-  const karier = hasil.filter((r) => r.jenis === "Karier").length;
-  const lanjutan = hasil.filter((r) => r.status === "lanjutan").length;
+  const akademik = hasil.filter((r) => r.kategori === "Akademik").length;
+  const karier = hasil.filter((r) => r.kategori === "Karier").length;
+  const lanjutan = hasil.filter((r) => r.status === "perlu_pertemuan_lanjutan").length;
   const persen = (n: number) => (total === 0 ? 0 : Math.round((n / total) * 100));
 
   const totalHalaman = Math.max(1, Math.ceil(total / PER_HALAMAN));
@@ -77,6 +106,10 @@ export default function GuruLaporan() {
     a.remove();
     URL.revokeObjectURL(url);
   }
+
+  const pesanKosong = loading
+    ? "Memuat rekaman..."
+    : error || "Tidak ada rekaman yang cocok dengan filter.";
 
   return (
     <div className="gl-page">
@@ -153,7 +186,7 @@ export default function GuruLaporan() {
           className="dashboard-select"
         >
           <option value="semua">Semua Semester</option>
-          {SEMESTER.map((s) => (
+          {daftarSemester.map((s) => (
             <option key={s} value={s}>
               {s}
             </option>
@@ -169,7 +202,7 @@ export default function GuruLaporan() {
           className="dashboard-select"
         >
           <option value="semua">Semua Kelas</option>
-          {KELAS.map((k) => (
+          {daftarKelas.map((k) => (
             <option key={k} value={k}>
               {k}
             </option>
@@ -227,31 +260,30 @@ export default function GuruLaporan() {
               {tampil.length === 0 ? (
                 <tr>
                   <td colSpan={6} className="gl-empty">
-                    Tidak ada rekaman yang cocok dengan filter.
+                    {pesanKosong}
                   </td>
                 </tr>
               ) : (
                 tampil.map((r, i) => {
-                  const st = STATUS_PERMOHONAN[r.status];
+                  const st = gayaGuru(r.status);
                   return (
                     <tr key={r.id}>
                       <td>
                         <div className="media">
                           <span
                             className={
-                              "avatar-sm " +
-                              AVATAR_STYLE[(mulai + i) % AVATAR_STYLE.length]
+                              "avatar-sm " + AVATAR_STYLE[(mulai + i) % AVATAR_STYLE.length]
                             }
                           >
-                            {inisial(r.nama)}
+                            {inisial(r.siswa)}
                           </span>
-                          <span className="gl-name">{r.nama}</span>
+                          <span className="gl-name">{r.siswa}</span>
                         </div>
                       </td>
                       <td className="gl-text">{r.kelas}</td>
                       <td>
-                        <span className={"gl-badge " + KATEGORI_STYLE[r.jenis]}>
-                          {r.jenis}
+                        <span className={"gl-badge " + (KATEGORI_STYLE[r.kategori] ?? "")}>
+                          {r.kategori}
                         </span>
                       </td>
                       <td className="gl-muted">{formatTanggalPendek(r.tanggal)}</td>
@@ -261,7 +293,7 @@ export default function GuruLaporan() {
                       <td>
                         <Link
                           to={`/guru/permohonan/${r.id}`}
-                          aria-label={`Lihat detail ${r.nama}`}
+                          aria-label={`Lihat detail ${r.siswa}`}
                           title="Lihat detail"
                           className="gl-view"
                         >

@@ -363,7 +363,7 @@ export default function AdminSiswaPage() {
               <span className="dlg-icon-danger"><Trash2 className="size-5" /></span>
               <div>
                 <h2 id="judul-hapus" className="dlg-title">Hapus siswa?</h2>
-                <p className="copy-sub-1">Data <span className="semibold">{hapus.nama}</span> (NIS {hapus.nis}) dan akun loginnya akan dihapus. Tindakan ini tidak dapat dibatalkan.</p>
+                <p className="copy-sub-1">Data <span className="semibold">{hapus.nama}</span> (NIS {hapus.nis}) dan akun loginnya akan dihapus, termasuk seluruh riwayat konselingnya. Tindakan ini tidak dapat dibatalkan.</p>
               </div>
             </div>
             <div className="dlg-actions-tight">

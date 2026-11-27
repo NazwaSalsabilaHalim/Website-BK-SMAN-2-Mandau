@@ -1,23 +1,19 @@
-import {
-  CircleCheck,
-  Info,
-  NotebookPen,
-  Send,
-} from "lucide-react";
+import { CircleCheck, Info, NotebookPen, Send } from "lucide-react";
 import { useState, type FormEvent, type ReactNode } from "react";
 import { Link, useNavigate } from "react-router";
-import Breadcrumb from "../../components/bk/Breadcrumb";
-import { getSession } from "../../lib/bkAuth";
+import Breadcrumb from "@/components/bk/Breadcrumb";
+import { getSession } from "@/lib/bkAuth";
+import { KATEGORI } from "@/data/riwayatContoh";
 import {
-  GURU_BK,
-  KATEGORI,
-  RIWAYAT,
-  STATUS_STYLE,
+  ApiError,
+  apiFetch,
+  gayaStatus,
   hitungRingkasan,
-} from "../../data/riwayatContoh";
-
-/* Data profil contoh. Nanti dari API (/api/me atau tabel siswa). */
-const PROFIL = { nisn: "0092348512", kelas: "Kelas XII - MIPA 1" };
+  useApi,
+  type GuruPilihan,
+  type Konseling,
+  type Me,
+} from "@/lib/konselingApi";
 
 const LANGKAH = [
   "Isi formulir pengajuan dengan data yang akurat dan deskripsi jelas.",
@@ -27,6 +23,7 @@ const LANGKAH = [
 
 type FormState = {
   jenis: string;
+  /** id Guru BK (string dari <select>) */
   guru: string;
   topik: string;
   deskripsi: string;
@@ -44,6 +41,16 @@ const KOSONG: FormState = {
 };
 
 type Errors = Partial<Record<keyof FormState, string>>;
+
+/** Nama field di API -> nama field di form */
+const PETA_FIELD: Record<string, keyof FormState> = {
+  guru_bk_id: "guru",
+  kategori: "jenis",
+  topik: "topik",
+  deskripsi: "deskripsi",
+  tanggal: "tanggal",
+  waktu: "waktu",
+};
 
 function Field({
   label,
@@ -76,18 +83,26 @@ function Field({
 export default function SiswaAjukan() {
   const navigate = useNavigate();
   const session = getSession();
-  const nama = session?.name || "Siswa";
+
+  const { data: me } = useApi<Me>("/me");
+  const { data: guruList } = useApi<GuruPilihan[]>("/guru-bk-pilihan");
+  const { data: riwayat } = useApi<Konseling[]>("/konseling");
+
+  const nama = me?.user.name || session?.name || "Siswa";
+  const daftarGuru = guruList ?? [];
+  const daftarRiwayat = riwayat ?? [];
 
   // Tanggal hari ini (yyyy-mm-dd) sebagai batas minimal pilihan tanggal
   const [hariIni] = useState(() => new Date().toLocaleDateString("en-CA"));
 
   const [form, setForm] = useState<FormState>(KOSONG);
   const [errors, setErrors] = useState<Errors>({});
+  const [galat, setGalat] = useState("");
   const [loading, setLoading] = useState(false);
   const [terkirim, setTerkirim] = useState(false);
 
-  const ringkasan = hitungRingkasan(RIWAYAT);
-  const statusTerakhir = STATUS_STYLE[RIWAYAT[0].status];
+  const ringkasan = hitungRingkasan(daftarRiwayat);
+  const terakhir = daftarRiwayat[0] ? gayaStatus(daftarRiwayat[0].status) : null;
 
   function ubah<K extends keyof FormState>(key: K, nilai: FormState[K]) {
     setForm((f) => ({ ...f, [key]: nilai }));
@@ -112,21 +127,46 @@ export default function SiswaAjukan() {
 
   async function handleSubmit(ev: FormEvent) {
     ev.preventDefault();
+    setGalat("");
     const e = validasi();
     setErrors(e);
     if (Object.keys(e).length > 0) return;
 
     setLoading(true);
-    // TODO: kirim ke backend -> POST /api/konseling (header Authorization: Bearer token).
-    // Sementara ini hanya simulasi supaya alur tampilan bisa dicoba.
-    await new Promise((r) => setTimeout(r, 600));
-    setLoading(false);
-    setTerkirim(true);
+    try {
+      await apiFetch("/konseling", {
+        method: "POST",
+        body: {
+          guru_bk_id: Number(form.guru),
+          kategori: form.jenis,
+          topik: form.topik.trim(),
+          deskripsi: form.deskripsi.trim(),
+          tanggal: form.tanggal,
+          waktu: form.waktu,
+        },
+      });
+      setTerkirim(true);
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 422) {
+        const baru: Errors = {};
+        for (const [kunci, pesan] of Object.entries(err.errors)) {
+          const field = PETA_FIELD[kunci];
+          if (field) baru[field] = pesan[0];
+        }
+        setErrors(baru);
+        if (Object.keys(baru).length === 0) setGalat(err.message);
+      } else {
+        setGalat(err instanceof Error ? err.message : "Gagal mengirim pengajuan.");
+      }
+    } finally {
+      setLoading(false);
+    }
   }
 
   function ajukanLagi() {
     setForm(KOSONG);
     setErrors({});
+    setGalat("");
     setTerkirim(false);
   }
 
@@ -216,10 +256,14 @@ export default function SiswaAjukan() {
                       onChange={(e) => ubah("guru", e.target.value)}
                       className={"dashboard-input " + border("guru")}
                     >
-                      <option value="">Pilih Guru BK</option>
-                      {GURU_BK.map((g) => (
-                        <option key={g} value={g}>
-                          {g}
+                      <option value="">
+                        {guruList && daftarGuru.length === 0
+                          ? "Belum ada Guru BK aktif"
+                          : "Pilih Guru BK"}
+                      </option>
+                      {daftarGuru.map((g) => (
+                        <option key={g.id} value={String(g.id)}>
+                          {g.nama}
                         </option>
                       ))}
                     </select>
@@ -289,6 +333,12 @@ export default function SiswaAjukan() {
                   </Field>
                 </div>
 
+                {galat && (
+                  <p role="alert" className="frm-error">
+                    {galat}
+                  </p>
+                )}
+
                 <div className="sa-foot">
                   <button
                     type="button"
@@ -328,8 +378,8 @@ export default function SiswaAjukan() {
               </span>
               <div className="sa-profile-info">
                 <p className="sa-profile-name">{nama}</p>
-                <p className="sa-profile-nisn">NISN: {PROFIL.nisn}</p>
-                <p className="sa-profile-kelas">{PROFIL.kelas}</p>
+                <p className="sa-profile-nisn">NIS: {me?.user.nis || "-"}</p>
+                <p className="sa-profile-kelas">Kelas {me?.user.kelas || "-"}</p>
               </div>
             </div>
             <dl className="sa-facts">
@@ -339,9 +389,13 @@ export default function SiswaAjukan() {
               </div>
               <div className="sa-fact sa-fact-border">
                 <dt className="sa-fact-label">Status Terakhir</dt>
-                <dd className={"badge-sq-tight " + statusTerakhir.badge}>
-                  {statusTerakhir.label}
-                </dd>
+                {terakhir ? (
+                  <dd className={"badge-sq-tight " + terakhir.badge}>
+                    {terakhir.label}
+                  </dd>
+                ) : (
+                  <dd className="sa-fact-value">-</dd>
+                )}
               </div>
             </dl>
           </section>
